@@ -10,6 +10,7 @@ defmodule ExqUi.RouterPlug do
       else
         [name: Exq.Api.Server.server_name(ExqUi)]
       end
+
     Keyword.put(options, :exq_opts, enq_opts)
   end
 
@@ -17,9 +18,11 @@ defmodule ExqUi.RouterPlug do
     namespace_opt = opts[:namespace] || "exq"
     conn = Plug.Conn.assign(conn, :namespace, namespace_opt)
     conn = Plug.Conn.assign(conn, :exq_name, opts[:exq_opts][:name])
+
     case namespace_opt do
       "" ->
         Router.call(conn, Router.init(opts))
+
       _ ->
         namespace(conn, opts, namespace_opt)
     end
@@ -35,11 +38,11 @@ defmodule ExqUi.RouterPlug do
     import Plug.Conn
     use Plug.Router
 
-    plug Plug.Static, at: "/", from: :exq_ui
-    plug ExqUi.JsonApi, on: "api"
+    plug(Plug.Static, at: "/", from: :exq_ui)
+    plug(ExqUi.JsonApi, on: "api")
 
-    plug :match
-    plug :dispatch
+    plug(:match)
+    plug(:dispatch)
 
     get "/api/stats/all" do
       {:ok, processed} = Exq.Api.stats(conn.assigns[:exq_name], "processed")
@@ -51,42 +54,59 @@ defmodule ExqUi.RouterPlug do
 
       {:ok, queues} = Exq.Api.queue_size(conn.assigns[:exq_name])
 
-      queue_sizes = for {_q, size} <- queues do
-        size
-      end
+      queue_sizes =
+        for {_q, size} <- queues do
+          size
+        end
+
       qtotal = "#{Enum.sum(queue_sizes)}"
 
-      {:ok, json} = Poison.encode(%{stat: %{id: "all", processed: processed || 0, failed: failed || 0,
-        busy: busy || 0, scheduled: scheduled || 0, dead: dead || 0, retrying: retrying || 0, enqueued: qtotal}})
+      {:ok, json} =
+        json_library().encode(%{
+          stat: %{
+            id: "all",
+            processed: processed || 0,
+            failed: failed || 0,
+            busy: busy || 0,
+            scheduled: scheduled || 0,
+            dead: dead || 0,
+            retrying: retrying || 0,
+            enqueued: qtotal
+          }
+        })
+
       conn |> send_resp(200, json) |> halt
     end
 
     get "/api/realtimes" do
       {:ok, failures, successes} = Exq.Api.realtime_stats(conn.assigns[:exq_name])
 
-      f = for {date, count} <- failures do
-        %{id: "f#{date}", timestamp: date, count: count}
-      end
+      f =
+        for {date, count} <- failures do
+          %{id: "f#{date}", timestamp: date, count: count}
+        end
 
-      s = for {date, count} <- successes do
-        %{id: "s#{date}", timestamp: date, count: count}
-      end
+      s =
+        for {date, count} <- successes do
+          %{id: "s#{date}", timestamp: date, count: count}
+        end
+
       all = %{realtimes: f ++ s}
 
-      {:ok, json} = Poison.encode(all)
+      {:ok, json} = json_library().encode(all)
       conn |> send_resp(200, json) |> halt
     end
 
     get "/api/scheduled" do
       {:ok, jobs} = Exq.Api.scheduled_with_scores(conn.assigns[:exq_name])
-      {:ok, json} = Poison.encode(%{scheduled: map_score_to_jobs(jobs) })
+      {:ok, json} = json_library().encode(%{scheduled: map_score_to_jobs(jobs)})
       conn |> send_resp(200, json) |> halt
     end
 
     get "/api/retries" do
       {:ok, retries} = Exq.Api.retries(conn.assigns[:exq_name])
       retries = retries |> map_jid_to_id |> convert_results_to_times(:failed_at)
-      {:ok, json} = Poison.encode(%{retries: retries})
+      {:ok, json} = json_library().encode(%{retries: retries})
 
       conn |> send_resp(200, json) |> halt
     end
@@ -94,7 +114,7 @@ defmodule ExqUi.RouterPlug do
     get "/api/retries/:id" do
       {:ok, retry} = Exq.Api.find_retry(conn.assigns[:exq_name], id)
       retry = retry |> map_jid_to_id |> convert_results_to_times(:failed_at)
-      {:ok, json} = Poison.encode(%{retry: retry})
+      {:ok, json} = json_library().encode(%{retry: retry})
 
       conn |> send_resp(200, json) |> halt
     end
@@ -102,7 +122,7 @@ defmodule ExqUi.RouterPlug do
     get "/api/failures" do
       {:ok, failures} = Exq.Api.failed(conn.assigns[:exq_name])
       failures = failures |> map_jid_to_id |> convert_results_to_times(:failed_at)
-      {:ok, json} = Poison.encode(%{failures: failures})
+      {:ok, json} = json_library().encode(%{failures: failures})
       conn |> send_resp(200, json) |> halt
     end
 
@@ -152,7 +172,7 @@ defmodule ExqUi.RouterPlug do
       process_jobs =
         for p <- processes do
           process = Map.delete(p, :job)
-          pjob = Jason.decode!(p.job, keys: :atoms)
+          pjob = json_library().decode!(p.job, keys: :atoms)
 
           process =
             Map.put(process, :job_id, pjob.jid)
@@ -166,14 +186,14 @@ defmodule ExqUi.RouterPlug do
       processes = for [process, _job] <- process_jobs, do: process
       jobs = for [_process, job] <- process_jobs, do: job
 
-      {:ok, json} = Poison.encode(%{processes: processes, jobs: jobs})
+      {:ok, json} = json_library().encode(%{processes: processes, jobs: jobs})
       conn |> send_resp(200, json) |> halt
     end
 
     get "/api/queues" do
       {:ok, queues} = Exq.Api.queue_size(conn.assigns[:exq_name])
       job_counts = for {q, size} <- queues, do: %{id: q, size: size}
-      {:ok, json} = Poison.encode(%{queues: job_counts})
+      {:ok, json} = json_library().encode(%{queues: job_counts})
       conn |> send_resp(200, json) |> halt
     end
 
@@ -181,7 +201,13 @@ defmodule ExqUi.RouterPlug do
       {:ok, jobs} = Exq.Api.jobs(conn.assigns[:exq_name], id)
       jobs_structs = map_jid_to_id(jobs)
       job_ids = for j <- jobs_structs, do: j[:id]
-      {:ok, json} = Poison.encode(%{queue: %{id: id, job_ids: job_ids, partial: false}, jobs: map_jid_to_id(jobs)})
+
+      {:ok, json} =
+        json_library().encode(%{
+          queue: %{id: id, job_ids: job_ids, partial: false},
+          jobs: map_jid_to_id(jobs)
+        })
+
       conn |> send_resp(200, json) |> halt
     end
 
@@ -197,18 +223,19 @@ defmodule ExqUi.RouterPlug do
 
     # precompile index.html into render_index/1 function
     index_path = Path.join([Application.app_dir(:exq_ui), "priv/static/index.html"])
-    EEx.function_from_file :defp, :render_index, index_path, [:assigns]
+    EEx.function_from_file(:defp, :render_index, index_path, [:assigns])
 
     match _ do
-      base = case conn.assigns[:namespace] do
-        "" -> ""
-        namespace -> "#{namespace}/"
-      end
+      base =
+        case conn.assigns[:namespace] do
+          "" -> ""
+          namespace -> "#{namespace}/"
+        end
 
       conn
-        |> put_resp_header("content-type", "text/html")
-        |> send_resp(200, render_index(base: base))
-        |> halt
+      |> put_resp_header("content-type", "text/html")
+      |> send_resp(200, render_index(base: base))
+      |> halt
     end
 
     def map_jid_to_id(jobs) when is_list(jobs) do
@@ -216,6 +243,7 @@ defmodule ExqUi.RouterPlug do
         map_jid_to_id(job)
       end
     end
+
     def map_jid_to_id(job), do: Map.put(job, :id, job.jid)
 
     def convert_results_to_times(jobs, score_key) when is_list(jobs) do
@@ -223,6 +251,7 @@ defmodule ExqUi.RouterPlug do
         convert_results_to_times(job, score_key)
       end
     end
+
     def convert_results_to_times(job, score_key) do
       Map.put(job, score_key, score_to_time(Map.get(job, score_key)))
     end
@@ -230,7 +259,7 @@ defmodule ExqUi.RouterPlug do
     def score_to_time(score) when is_float(score) do
       round(score * 1_000_000)
       |> DateTime.from_unix!(:microseconds)
-      |> DateTime.to_iso8601
+      |> DateTime.to_iso8601()
     end
 
     def score_to_time(score) do
@@ -238,28 +267,26 @@ defmodule ExqUi.RouterPlug do
         score_to_time(String.to_float(score))
       else
         String.to_integer(score)
-        |> DateTime.from_unix!
-        |> DateTime.to_iso8601
+        |> DateTime.from_unix!()
+        |> DateTime.to_iso8601()
       end
     end
 
     def map_score_to_jobs(jobs) do
       Enum.map(jobs, fn {job, score} ->
-        Map.merge(
-          job,
-          %{
-            id: job.jid,
-            scheduled_at: score_to_time(score),
-            args: safe_json_encode(job.args)
-          }
-        )
+        job
+        |> Map.put(:scheduled_at, score_to_time(score))
+        |> Map.put(:id, job.jid)
+        |> Map.put(:args, safe_json_encode(job.args))
       end)
     end
 
     def safe_json_encode(data) do
-      Jason.encode!(data)
+      json_library.encode!(data)
     rescue
       _ -> data
     end
+
+    defp json_library, do: Application.get_env(:exq_ui, :json_library)
   end
 end
